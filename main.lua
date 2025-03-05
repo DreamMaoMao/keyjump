@@ -7,6 +7,7 @@ local SPECIAL_KEYS = {
 	"<A-j>", "<A-k>",
 	"z",
 	"<C-j>", "<C-k>",
+	"<C-f>", "<C-b>",
 	"y", "p",
 }
 
@@ -143,6 +144,7 @@ local INPUT_CANDS = {
 	{ on = "<A-j>" }, { on = "<A-k>" },
 	{ on = "<C-j>" }, { on = "<C-k>" },
 	{ on = "J" }, { on = "K" },
+	{ on = "<C-f>" }, { on = "<C-b>" },
 
 }
 
@@ -154,6 +156,7 @@ local INPUT_KEY = {
 	"<A-j>", "<A-k>" ,
 	"<C-j>", "<C-k>" ,
 	"J", "K",
+	"<C-f>", "<C-b>" ,
 }
 
 
@@ -209,7 +212,8 @@ local function count_files(url, max)
 	if ya.target_family() == "windows" then
 		cmd = cx.active.pref.show_hidden and "dir /b /a " or "dir /b "
 		cmd = cmd .. tostring(url)
-		ya.err(cmd)
+		cmd = cmd .. ' | find /c /v ""'
+		--ya.err(cmd)
 	else
 		local target_cwd = '"'..tostring(url)..'"'
 		cmd = cx.active.pref.show_hidden and "ls -A  " or "ls "
@@ -217,7 +221,9 @@ local function count_files(url, max)
 	end
 
 	if ya.target_family() == "windows" then
-		local i, handle = 0, io.popen(cmd)
+--[[ 这部分代码引起 ctrl-c 退出程序，而不是关闭标签页，先注释掉此部分代码
+		local i = 0
+ 		local handle = io.popen(cmd)
 		for _ in handle:lines() do
 			i = i + 1
 			if i == max then
@@ -226,6 +232,27 @@ local function count_files(url, max)
 		end
 		handle:close()
 		return i
+		 ]]
+		
+--[[ 		local f = io.popen(cmd)
+		local output = f:read("*all")
+		local num = tonumber(output:gsub("%s+", ""), 10)
+		f:close()
+		local tourl = Url(tostring(url))
+		ya.err('aaa', url, tourl)
+		local files, err = fs.read_dir(tourl,{})
+		ya.err("ccc", #files)
+		if num == nil then
+			return 0
+		end
+		if num > max then
+			return max
+		else
+			return num
+		end
+		  ]]
+		return max
+		
 	else
 		local f = io.popen(cmd)
 		local output = f:read("*all")
@@ -252,7 +279,7 @@ local toggle_ui = ya.sync(function(st)
 
 	if st.icon or st.mode then
 		Entity.icon, Status.mode, st.icon, st.mode = st.icon, st.mode, nil, nil
-		ya.manager_emit("peek", { force = true })
+		ya.mgr_emit("peek", { force = true })
 		ya.render()
 		return
 	end
@@ -310,7 +337,7 @@ local toggle_ui = ya.sync(function(st)
 		}
 	end
 
-	ya.manager_emit("peek", { force = true })
+	ya.mgr_emit("peek", { force = true })
 	ya.render()
 end)
 
@@ -323,14 +350,25 @@ local function split_yazi_cmd_arg(cmd)
 	return cmd_table
 end
 
-local function count_preview_files(st)
+local function count_preview_files(st, previewFilesCount)
 	local h = cx.active.current.hovered
 	-- TODO:under_cursor_file maybe nil,because aync task,floder may not ready
 	if h and h.cha.is_dir then
-		st.preview_num = count_files(tostring(h.url), #GLOBAL_PARENT_DOUBLE_KEYS)
+		-- st.preview_num = count_files(tostring(h.url), #GLOBAL_PARENT_DOUBLE_KEYS)
+		if previewFilesCount < #GLOBAL_PARENT_DOUBLE_KEYS then
+			st.preview_num = previewFilesCount
+		else
+			st.preview_num = #GLOBAL_PARENT_DOUBLE_KEYS
+		end
 	else
 		st.preview_num = 0
 	end
+end
+
+local function jk_around(direction)
+	local current = cx.active.current
+	local new = (current.cursor + direction) % #current.files
+	ya.mgr_emit("arrow", { new - current.cursor })
 end
 
 local apply = ya.sync(function(state, arg_cand, arg_current_num, arg_parent_num, arg_preview_num)
@@ -350,72 +388,81 @@ local apply = ya.sync(function(state, arg_cand, arg_current_num, arg_parent_num,
 		elseif special_key_str == "z" then
 			return true
 		elseif special_key_str == "<Enter>" then
-			ya.manager_emit("open", {})
+			local under_cursor_file = cx.active.current.window[folder.cursor - folder.offset + 1]
+			if under_cursor_file.cha.is_dir then
+				ya.mgr_emit("enter", {})
+			else
+				ya.mgr_emit("open", {})
+			end
 			return true
 		elseif special_key_str == "<Left>" then
-			ya.manager_emit("leave", {})
+			ya.mgr_emit("leave", {})
 			return false
 		elseif special_key_str == "<Right>" then
-			ya.manager_emit("enter", {})
+			ya.mgr_emit("enter", {})
 			return false
 		elseif special_key_str == "<Up>" then
-			ya.manager_emit("arrow", { "-1" })
+			--ya.mgr_emit("arrow", { "-1" })
+			jk_around(-1)
 			return false
 		elseif special_key_str == "<Down>" then
-			ya.manager_emit("arrow", { "1" })
+			--ya.mgr_emit("arrow", { "1" })
+			jk_around(1)
 			return false
 		elseif special_key_str == "<Space>" then
 			local under_cursor_file = cx.active.current.window[folder.cursor - folder.offset + 1]
 			local toggle_state = under_cursor_file:is_selected() and "false" or "true"
-			ya.manager_emit("toggle", { state = toggle_state })
-			ya.manager_emit("arrow", { 1 })
+			ya.mgr_emit("toggle", { state = toggle_state })
+			ya.mgr_emit("arrow", { 1 })
 			return false
-		elseif special_key_str == "h"then
+		elseif special_key_str == "h" then
 			if state.type == "global" then
-				ya.manager_emit("leave", {})
+				ya.mgr_emit("leave", {})
 			end
 			return false
-		elseif special_key_str == "j"then
+		elseif special_key_str == "j" then
 			if state.type == "global" then
-				ya.manager_emit("arrow", { "1" })
+				--ya.mgr_emit("arrow", { "1" })
+				jk_around(1)
 			end
 			return false
-		elseif special_key_str == "k"then
+		elseif special_key_str == "k" then
 			if state.type == "global" then
-				ya.manager_emit("arrow", { "-1" })
+				--ya.mgr_emit("arrow", { "-1" })
+				jk_around(-1)
 			end
 			return false
-		elseif special_key_str == "l"then
+		elseif special_key_str == "l" then
 			if state.type == "global" then			
-				ya.manager_emit("enter", {})
+				ya.mgr_emit("enter", {})
 			end
 			return false
 		elseif special_key_str == "J" then
-			ya.manager_emit("arrow", { "5" })
+			ya.mgr_emit("arrow", { "5" })
 			return false
 		elseif special_key_str == "K" then
-			ya.manager_emit("arrow", { "-5" })
+			ya.mgr_emit("arrow", { "-5" })
 			return false
 		elseif special_key_str == "<A-j>" then
-			ya.manager_emit("seek", { "5" })
+			ya.mgr_emit("seek", { "5" })
 			return false
 		elseif special_key_str == "<A-k>" then
-			ya.manager_emit("seek", { "-5" })
+			ya.mgr_emit("seek", { "-5" })
 			return false
-		elseif special_key_str == "<C-j>" then
-			ya.manager_emit("arrow", { "100%" })
+		elseif special_key_str == "<C-j>" or special_key_str == "<C-f>" then
+			ya.mgr_emit("arrow", { "100%" })
 			return false
-		elseif special_key_str == "<C-k>" then
-			ya.manager_emit("arrow", { "-100%" })
+		elseif special_key_str == "<C-k>" or special_key_str == "<C-b>" then
+			ya.mgr_emit("arrow", { "-100%" })
 			return false
 		elseif special_key_str == "y"then
 			if state.type == "global" then
-				ya.manager_emit("yank", {})
+				ya.mgr_emit("yank", {})
 			end
 			return false
 		elseif special_key_str == "p"then
 			if state.type == "global" then
-				ya.manager_emit("paste", {})
+				ya.mgr_emit("paste", {})
 			end
 			return false
 
@@ -427,18 +474,24 @@ local apply = ya.sync(function(state, arg_cand, arg_current_num, arg_parent_num,
 		-- hit current area
 		if cand <= current_entry_num then -- hit normal key
 			local current_folder = cx.active.current
-			ya.manager_emit("arrow", { cand - 1 + current_folder.offset - current_folder.cursor })
+			-- ya.mgr_emit("arrow", { cand - 1 + current_folder.offset - current_folder.cursor })
+			local under_cursor_file = cx.active.current.window[cand]
+			if under_cursor_file.cha.is_dir then
+				ya.mgr_emit("cd", {under_cursor_file.url})
+			else
+				ya.mgr_emit("arrow", { cand - 1 + current_folder.offset - current_folder.cursor })
+			end
 		-- hit parent area
 		elseif cand > current_entry_num and cand <= (current_entry_num + parent_entry_num) then
 			local parent_folder = cx.active.parent
-			ya.manager_emit("leave", {})
-			ya.manager_emit("arrow", { cand - current_entry_num - 1 + parent_folder.offset - parent_folder.cursor })
+			ya.mgr_emit("leave", {})
+			ya.mgr_emit("arrow", { cand - current_entry_num - 1 + parent_folder.offset - parent_folder.cursor })
 		-- hit preview area
 		elseif
 			cand > (current_entry_num + parent_entry_num) and cand <= (current_entry_num + parent_entry_num + preview_entry_num) then
 			local preview_folder = cx.active.preview.folder
-			ya.manager_emit("enter", {})
-			ya.manager_emit(
+			ya.mgr_emit("enter", {})
+			ya.mgr_emit(
 				"arrow",
 				{ cand - current_entry_num - parent_entry_num - 1 + cx.active.preview.skip - preview_folder.cursor }
 			)
@@ -460,7 +513,7 @@ local apply = ya.sync(function(state, arg_cand, arg_current_num, arg_parent_num,
 	if state.type == "select" then
 		if cand <= current_entry_num then -- hit normal key
 			local folder = cx.active.current
-			ya.manager_emit("arrow", { cand - 1 + folder.offset - folder.cursor })
+			ya.mgr_emit("arrow", { cand - 1 + folder.offset - folder.cursor })
 		end
 
 		return false
@@ -468,12 +521,12 @@ local apply = ya.sync(function(state, arg_cand, arg_current_num, arg_parent_num,
 
 	-- apply keep mode and normal mode
 	if (state.type == "keep" or not state.type) and folder.window[cand] then
-		ya.manager_emit("arrow", { cand - 1 + folder.offset - folder.cursor })
+		ya.mgr_emit("arrow", { cand - 1 + folder.offset - folder.cursor })
 	end
 
 	-- keep mode will auto enter when select folder and continue keep mode
 	if state.type == "keep" and folder.window[cand] and folder.window[cand].cha.is_dir then
-		ya.manager_emit("enter", {})
+		ya.mgr_emit("enter", {})
 		return false
 	elseif folder.window[cand] == nil then
 		return false
@@ -485,11 +538,16 @@ end)
 
 local update_double_first_key = ya.sync(function(state, str)
 	state.double_first_key = str
-	ya.manager_emit("peek", { force = true })
+	ya.mgr_emit("peek", { force = true })
 end)
 
-local recaculate_preview_num  = ya.sync(function(state, cwd)
-	state.preview_num = count_files(cwd, #GLOBAL_PREVIEW_DOUBLE_KEYS)
+local recaculate_preview_num  = ya.sync(function(state, cwd, fileCount)
+	-- state.preview_num = count_files(cwd, #GLOBAL_PREVIEW_DOUBLE_KEYS)
+	if fileCount < #GLOBAL_PREVIEW_DOUBLE_KEYS then
+		state.preview_num = fileCount
+	else 
+		state.preview_num = #GLOBAL_PREVIEW_DOUBLE_KEYS
+	end
 end)
 
 local function read_input_todo (arg_current_num,arg_parent_num,arg_preview_num,arg_type)
@@ -661,7 +719,7 @@ local function read_input_todo (arg_current_num,arg_parent_num,arg_preview_num,a
 end
 
 
-local init_global_action = ya.sync(function(state,arg_times)
+local init_global_action = ya.sync(function(state,arg_times, previewFilesCount)
 
 	-- "once" or nil,nil means to don't auto exit
 	state.times = arg_times
@@ -674,7 +732,7 @@ local init_global_action = ya.sync(function(state,arg_times)
 		state.parent_num = 0
 	end
 
-	count_preview_files(state)
+	count_preview_files(state, previewFilesCount)
 
 	return {state.current_num, state.parent_num, state.preview_num}
 
@@ -730,12 +788,25 @@ local add_cwd_status_watch = ya.sync(function(state)
 		if ((#cx.active.current.window >0 and cx.active.current.hovered and cx.active.current.hovered.url) or state.preview_num == 0) and state.again then
 			state.again = false
 			local times = state.times and state.times or ""
-			ya.manager_emit("plugin", { "keyjump", args = ya.quote(state.type).." "..times})	
+			ya.mgr_emit("plugin", { "keyjump", ya.quote(state.type).." "..times})	
 		end
 		return ui.Line{}
 	end
 	state.header_status_id = Header:children_add(cwd_status,200,Header.LEFT)
 end)
+
+local hoveredUrl = ya.sync(function(state)
+	return cx.active.current.hovered.url
+end)
+
+local file_count = function(url)
+	local files, err = fs.read_dir(url,{})
+	if err == nil then
+		return #files
+	else 
+		return 0
+	end
+end
 
 return {
 	setup = function(state, opts)
@@ -775,7 +846,9 @@ return {
 		-- enter global mode
 		if action == "global" then
 			local times = args[2]
-			local data = init_global_action(times)
+			local url = hoveredUrl()
+			local fileCount = file_count(url)
+			local data = init_global_action(times, fileCount)
 			toggle_ui()
 			want_exit = read_input_todo(data[1], data[2], data[3], action)
 		end
@@ -790,8 +863,9 @@ return {
 				end
 			end
 			local cmd = split_yazi_cmd_arg(go_table[cand].run)
-			recaculate_preview_num(cmd[2])
-			ya.manager_emit(cmd[1], { cmd[2], args=cmd[3] }) 
+			local fileCount = file_count(Url(cmd[2]))
+			recaculate_preview_num(cmd[2], fileCount)
+			ya.mgr_emit(cmd[1], { cmd[2], cmd[3] }) 
 			set_keep_hook(true)
 			go_again()
 		elseif want_exit == false and action and action ~= "" then
